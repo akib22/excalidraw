@@ -28,6 +28,8 @@ import { shouldTestInside } from "@excalidraw/element";
 import { hasBoundTextElement, isBoundToContainer } from "@excalidraw/element";
 import { getBoundTextElementId } from "@excalidraw/element";
 
+import { getFreedrawHitIndices } from "./freedrawSplit";
+
 import type { Bounds } from "@excalidraw/element";
 
 import type { GlobalPoint, LineSegment } from "@excalidraw/math/types";
@@ -42,6 +44,9 @@ import type App from "../components/App";
 export class EraserTrail extends AnimatedTrail {
   private elementsToErase: Set<ExcalidrawElement["id"]> = new Set();
   private groupsToErase: Set<ExcalidrawElement["id"]> = new Set();
+  private freedrawHitPoints: Map<ExcalidrawElement["id"], Set<number>> =
+    new Map();
+  private isPartialEraseMode = false;
 
   constructor(animationFrameHandler: AnimationFrameHandler, app: App) {
     super(animationFrameHandler, app, {
@@ -69,10 +74,12 @@ export class EraserTrail extends AnimatedTrail {
     });
   }
 
-  startPath(x: number, y: number): void {
+  startPath(x: number, y: number, isPartialErase = false): void {
     this.endPath();
     super.startPath(x, y);
     this.elementsToErase.clear();
+    this.freedrawHitPoints.clear();
+    this.isPartialEraseMode = isPartialErase;
   }
 
   addPointToPath(x: number, y: number, restore = false) {
@@ -126,6 +133,7 @@ export class EraserTrail extends AnimatedTrail {
             );
             for (const elementInGroup of elementsInGroup) {
               this.elementsToErase.delete(elementInGroup.id);
+              this.freedrawHitPoints.delete(elementInGroup.id);
             }
             this.groupsToErase.delete(shallowestGroupId);
           }
@@ -143,8 +151,9 @@ export class EraserTrail extends AnimatedTrail {
           }
 
           this.elementsToErase.delete(element.id);
+          this.freedrawHitPoints.delete(element.id);
         }
-      } else if (!restoreToErase && !this.elementsToErase.has(element.id)) {
+      } else if (!restoreToErase) {
         const intersects = eraserTest(
           pathSegment,
           element,
@@ -153,33 +162,53 @@ export class EraserTrail extends AnimatedTrail {
         );
 
         if (intersects) {
-          const shallowestGroupId = element.groupIds.at(-1)!;
+          if (!this.elementsToErase.has(element.id)) {
+            const shallowestGroupId = element.groupIds.at(-1)!;
 
-          if (!this.groupsToErase.has(shallowestGroupId)) {
-            const elementsInGroup = getElementsInGroup(
-              this.app.scene.getNonDeletedElementsMap(),
-              shallowestGroupId,
+            if (!this.groupsToErase.has(shallowestGroupId)) {
+              const elementsInGroup = getElementsInGroup(
+                this.app.scene.getNonDeletedElementsMap(),
+                shallowestGroupId,
+              );
+
+              for (const elementInGroup of elementsInGroup) {
+                this.elementsToErase.add(elementInGroup.id);
+              }
+              this.groupsToErase.add(shallowestGroupId);
+            }
+
+            if (hasBoundTextElement(element)) {
+              const boundText = getBoundTextElementId(element);
+
+              if (boundText) {
+                this.elementsToErase.add(boundText);
+              }
+            }
+
+            if (isBoundToContainer(element)) {
+              this.elementsToErase.add(element.containerId);
+            }
+
+            this.elementsToErase.add(element.id);
+          }
+
+          // Track freedraw hit indices for partial erase (every time we hit, not just first time)
+          if (isFreeDrawElement(element)) {
+            const hitIndices = getFreedrawHitIndices(
+              element,
+              pathSegment,
+              this.app.state.zoom.value,
+              candidateElementsMap,
             );
-
-            for (const elementInGroup of elementsInGroup) {
-              this.elementsToErase.add(elementInGroup.id);
-            }
-            this.groupsToErase.add(shallowestGroupId);
-          }
-
-          if (hasBoundTextElement(element)) {
-            const boundText = getBoundTextElementId(element);
-
-            if (boundText) {
-              this.elementsToErase.add(boundText);
+            if (hitIndices.length > 0) {
+              const existingHits = this.freedrawHitPoints.get(element.id) ??
+                new Set<number>();
+              for (const idx of hitIndices) {
+                existingHits.add(idx);
+              }
+              this.freedrawHitPoints.set(element.id, existingHits);
             }
           }
-
-          if (isBoundToContainer(element)) {
-            this.elementsToErase.add(element.containerId);
-          }
-
-          this.elementsToErase.add(element.id);
         }
       }
     }
@@ -187,11 +216,20 @@ export class EraserTrail extends AnimatedTrail {
     return Array.from(this.elementsToErase);
   }
 
+  getFreedrawHitPoints(): Map<ExcalidrawElement["id"], Set<number>> {
+    return new Map(this.freedrawHitPoints);
+  }
+
+  isPartialErase(): boolean {
+    return this.isPartialEraseMode;
+  }
+
   endPath(): void {
     super.endPath();
     super.clearTrails();
     this.elementsToErase.clear();
     this.groupsToErase.clear();
+    this.freedrawHitPoints.clear();
   }
 }
 

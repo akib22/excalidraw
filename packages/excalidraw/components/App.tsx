@@ -140,6 +140,7 @@ import {
   isBindingElementType,
   isBoundToContainer,
   isFrameLikeElement,
+  isFreeDrawElement,
   isImageElement,
   isEmbeddableElement,
   isInitializedImageElement,
@@ -405,6 +406,7 @@ import { isMaybeMermaidDefinition } from "../mermaid";
 import { LassoTrail } from "../lasso";
 
 import { EraserTrail } from "../eraser";
+import { splitFreeDrawElement } from "../eraser/freedrawSplit";
 
 import ConvertElementTypePopup, {
   getConversionTypeFromElements,
@@ -6838,9 +6840,11 @@ class App extends React.Component<AppProps, AppState> {
     );
 
     if (this.state.activeTool.type === "eraser") {
+      const isPartialErase = !!event.shiftKey;
       this.eraserTrail.startPath(
         pointerDownState.lastCoords.x,
         pointerDownState.lastCoords.y,
+        isPartialErase,
       );
     }
 
@@ -9743,7 +9747,9 @@ class App extends React.Component<AppProps, AppState> {
             this.elementsPendingErasure.add(hitElement.id),
           );
         }
-        this.eraseElements();
+        const isPartialErase = this.eraserTrail.isPartialErase();
+        const freedrawHitPoints = this.eraserTrail.getFreedrawHitPoints();
+        this.eraseElements(isPartialErase, freedrawHitPoints);
         return;
       } else if (this.elementsPendingErasure.size) {
         this.restoreReadyToEraseElements();
@@ -10062,8 +10068,13 @@ class App extends React.Component<AppProps, AppState> {
     this.triggerRender();
   };
 
-  private eraseElements = () => {
+  private eraseElements = (
+    isPartialErase = false,
+    freedrawHitPoints?: Map<ExcalidrawElement["id"], Set<number>>,
+  ) => {
     let didChange = false;
+    const splitResults: ExcalidrawFreeDrawElement[] = [];
+
     const elements = this.scene.getElementsIncludingDeleted().map((ele) => {
       if (
         this.elementsPendingErasure.has(ele.id) ||
@@ -10071,6 +10082,32 @@ class App extends React.Component<AppProps, AppState> {
         (isBoundToContainer(ele) &&
           this.elementsPendingErasure.has(ele.containerId))
       ) {
+        // Handle partial erase for freedraw elements
+        if (
+          isPartialErase &&
+          isFreeDrawElement(ele) &&
+          !ele.frameId &&
+          !isBoundToContainer(ele)
+        ) {
+          const hitIndices = freedrawHitPoints?.get(ele.id);
+          console.log("Partial erase check:", {
+            isPartialErase,
+            isFreeDrawElement: isFreeDrawElement(ele),
+            elementId: ele.id,
+            hitIndicesSize: hitIndices?.size,
+            freedrawHitPointsMap: freedrawHitPoints,
+          });
+          if (hitIndices?.size) {
+            const newElems = splitFreeDrawElement(ele, hitIndices);
+            console.log("Split result:", newElems);
+            if (newElems) {
+              splitResults.push(...newElems);
+              didChange = true;
+              return newElementWith(ele, { isDeleted: true });
+            }
+          }
+        }
+
         didChange = true;
         return newElementWith(ele, { isDeleted: true });
       }
@@ -10082,6 +10119,9 @@ class App extends React.Component<AppProps, AppState> {
     if (didChange) {
       this.store.scheduleCapture();
       this.scene.replaceAllElements(elements);
+      if (splitResults.length > 0) {
+        this.scene.insertElements(splitResults);
+      }
     }
   };
 

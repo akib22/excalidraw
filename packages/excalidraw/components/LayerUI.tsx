@@ -56,6 +56,7 @@ import ElementLinkDialog from "./ElementLinkDialog";
 import { ErrorDialog } from "./ErrorDialog";
 import { EyeDropper, activeEyeDropperAtom } from "./EyeDropper";
 import { FixedSideContainer } from "./FixedSideContainer";
+import { Minimap } from "./Minimap";
 import { HandButton } from "./HandButton";
 import { HelpDialog } from "./HelpDialog";
 import { HintViewer } from "./HintViewer";
@@ -626,6 +627,7 @@ const LayerUI = ({
                 {t("buttons.scrollBackToContent")}
               </button>
             )}
+            <Minimap app={app} />
           </div>
           {renderSidebars()}
         </>
